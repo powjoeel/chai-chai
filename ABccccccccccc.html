@@ -1,0 +1,406 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3D FPS Game with Pistol and Parkour</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+
+        /* Gun overlay */
+        #gunOverlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.4);
+            width: 150px;
+            height: auto;
+            pointer-events: none;
+            transition: transform 0.05s ease-out;
+        }
+
+        /* Melee overlay */
+        #meleeOverlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(45deg);
+            width: 150px;
+            height: auto;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease-out;
+        }
+
+        /* Muzzle Flash */
+        #muzzleFlash {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            width: 100px;
+            height: 100px;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            pointer-events: none;
+            opacity: 0;
+            transition: transform 0.05s ease, opacity 0.05s ease;
+        }
+
+        /* Dash cooldown overlay */
+        #dashCooldownOverlay {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 150px;
+            height: 20px;
+            background: rgba(255, 255, 255, 0.15);
+            border: 2px solid #fff;
+            border-radius: 10px;
+            overflow: hidden;
+            pointer-events: none;
+            opacity: 0.7;
+        }
+        #dashCooldownBar {
+            height: 100%;
+            background: #00ccff;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        /* Dash flash effect */
+        #dashFlash {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 204, 255, 0.3);
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease-out;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <img id="gunOverlay" src="https://example.com/pistol.png" alt="Pistol" />
+    <img id="meleeOverlay" src="https://example.com/melee.png" alt="Melee" />
+    <div id="muzzleFlash"></div>
+
+    <div id="dashCooldownOverlay"><div id="dashCooldownBar"></div></div>
+    <div id="dashFlash"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/PointerLockControls.js"></script>
+    <script>
+        // === Scene Setup ===
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 1.6, 5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // === Pointer Lock Controls ===
+        const controls = new THREE.PointerLockControls(camera, document.body);
+        scene.add(controls.getObject());
+
+        // Hold Right Click to look around
+        document.addEventListener("mousedown", (event) => {
+            if (event.button === 2) controls.lock();
+        });
+        document.addEventListener("mouseup", (event) => {
+            if (event.button === 2 && document.pointerLockElement) {
+                document.exitPointerLock();
+            }
+        });
+        document.addEventListener("contextmenu", (e) => e.preventDefault());
+
+        // === Movement Variables ===
+        let velocity = new THREE.Vector3();
+        let direction = new THREE.Vector3();
+        let dashVelocity = new THREE.Vector3();
+
+        let isUsingMelee = false;
+
+        const normalSpeed = 5;  // units per second
+        const dashSpeed = 20;
+        let speed = normalSpeed;
+
+        let isDashing = false;
+        let canDash = true;
+        const dashDuration = 200;  // milliseconds
+        const dashCooldown = 2000; // milliseconds
+
+        // === Parkour Variables ===
+        let isJumping = false;
+        let isWallJumping = false;
+        let isWallRunning = false;
+        let isClimbing = false;
+        let isSliding = false;
+
+        let jumpForce = 0.3;
+        let gravity = -0.015;
+        let wallJumpForce = 0.4;
+        let wallRunSpeed = 8;
+        let slideSpeed = 10;
+        let yVelocity = 0;
+
+        const keys = {};
+
+        // Dash cooldown UI elements
+        const dashCooldownBar = document.getElementById('dashCooldownBar');
+        const dashFlash = document.getElementById('dashFlash');
+
+        window.addEventListener("keydown", (event) => {
+            keys[event.key.toLowerCase()] = true;
+
+            if (event.key === "Shift" && canDash && !isDashing &&
+                (keys["w"] || keys["a"] || keys["s"] || keys["d"])) dash();
+
+            if (event.key === "q") toggleWeapon();
+            if (event.key === "e" && isUsingMelee) meleeAttack();
+            if (event.key === "Control" && !isSliding) {
+                isSliding = true;
+            }
+        });
+
+        window.addEventListener("keyup", (event) => {
+            keys[event.key.toLowerCase()] = false;
+            if (event.key === "Control") {
+                isSliding = false;
+            }
+        });
+
+        function toggleWeapon() {
+            isUsingMelee = !isUsingMelee;
+            document.getElementById("gunOverlay").style.opacity = isUsingMelee ? 0 : 1;
+            document.getElementById("meleeOverlay").style.opacity = isUsingMelee ? 1 : 0;
+        }
+
+        function meleeAttack() {
+            console.log("Melee attack!");
+        }
+
+        function dash() {
+            isDashing = true;
+            canDash = false;
+
+            // Determine dash direction
+            let dashDir = new THREE.Vector3();
+            const forward = new THREE.Vector3();
+            camera.getWorldDirection(forward);
+            forward.y = 0;
+            forward.normalize();
+
+            const right = new THREE.Vector3();
+            right.crossVectors(camera.up, forward).normalize();
+
+            if (keys["s"]) {
+                // Dash backward
+                dashDir.copy(forward).negate();
+            } else {
+                // Dash forward (default)
+                dashDir.copy(forward);
+            }
+
+            dashVelocity.copy(dashDir).multiplyScalar(dashSpeed);
+
+            // Show dash flash effect
+            dashFlash.style.opacity = '1';
+            setTimeout(() => {
+                dashFlash.style.opacity = '0';
+            }, 100);
+
+            // Animate dash cooldown bar
+            let cooldownStart = performance.now();
+
+            function updateCooldownBar() {
+                const elapsed = performance.now() - cooldownStart;
+                let progress = Math.min(elapsed / dashCooldown, 1);
+                dashCooldownBar.style.width = (progress * 100) + '%';
+                if (progress < 1) {
+                    requestAnimationFrame(updateCooldownBar);
+                } else {
+                    canDash = true;
+                    dashCooldownBar.style.width = '0%';
+                }
+            }
+            updateCooldownBar();
+
+            // Dash lasts dashDuration ms, after which velocity resets
+            setTimeout(() => {
+                dashVelocity.set(0, 0, 0);
+                isDashing = false;
+            }, dashDuration);
+        }
+
+        // === World ===
+        const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(100, 100),
+            new THREE.MeshBasicMaterial({ color: 0x777777 })
+        );
+        floor.rotation.x = -Math.PI / 2;
+        scene.add(floor);
+
+        const wallMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+        const wall1 = new THREE.Mesh(new THREE.BoxGeometry(100, 4, 1), wallMaterial); wall1.position.set(0, 2, -50);
+        const wall2 = new THREE.Mesh(new THREE.BoxGeometry(100, 4, 1), wallMaterial); wall2.position.set(0, 2, 50);
+        const wall3 = new THREE.Mesh(new THREE.BoxGeometry(1, 4, 100), wallMaterial); wall3.position.set(-50, 2, 0);
+        const wall4 = new THREE.Mesh(new THREE.BoxGeometry(1, 4, 100), wallMaterial); wall4.position.set(50, 2, 0);
+        scene.add(wall1, wall2, wall3, wall4);
+
+        const walls = [
+            new THREE.Box3().setFromObject(wall1),
+            new THREE.Box3().setFromObject(wall2),
+            new THREE.Box3().setFromObject(wall3),
+            new THREE.Box3().setFromObject(wall4),
+        ];
+
+        // === Enemy bean ===
+        const bean = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 16), new THREE.MeshBasicMaterial({ color: 0xff0000 }));
+        bean.scale.set(1.5, 1, 0.75);
+        bean.position.set(0, 1, -8);
+        scene.add(bean);
+
+        // === Shooting ===
+        const raycaster = new THREE.Raycaster();
+        document.addEventListener("click", (event) => {
+            raycaster.ray.origin.copy(camera.position);
+            raycaster.ray.direction.copy(camera.getWorldDirection(new THREE.Vector3()));
+
+            const intersects = raycaster.intersectObjects(scene.children);
+            for (let i = 0; i < intersects.length; i++) {
+                if (intersects[i].object === bean) {
+                    console.log("Hit Bean!");
+                    bean.material.color.set(0x00ff00);
+                    break;
+                }
+            }
+            triggerMuzzleFlash();
+        });
+
+        function triggerMuzzleFlash() {
+            const muzzleFlash = document.getElementById("muzzleFlash");
+            muzzleFlash.style.transform = "translate(-50%, -50%) scale(1)";
+            muzzleFlash.style.opacity = 1;
+            setTimeout(() => {
+                muzzleFlash.style.transform = "translate(-50%, -50%) scale(0)";
+                muzzleFlash.style.opacity = 0;
+            }, 100);
+        }
+
+        // === Parkour Movement ===
+        function wallJump() {
+            if (!isWallJumping) {
+                isWallJumping = true;
+                yVelocity = wallJumpForce;
+                setTimeout(() => isWallJumping = false, 500);
+            }
+        }
+
+        function wallRun() {
+            if (!isWallRunning && (keys["w"] || keys["a"] || keys["s"] || keys["d"])) {
+                for (let i = 0; i < walls.length; i++) {
+                    if (newPlayerBox.intersectsBox(walls[i])) {
+                        isWallRunning = true;
+                        speed = wallRunSpeed;
+                        setTimeout(() => isWallRunning = false, 1000);
+                        break;
+                    }
+                }
+            }
+        }
+
+        function climb() {
+            if (isClimbing && keys[" "]) {
+                velocity.y = 0.1;
+            }
+        }
+
+        // === Movement + Collision ===
+        function updateMovement(delta) {
+            direction.set(0, 0, 0);
+            if (keys["w"]) direction.z += 1;
+            if (keys["s"]) direction.z -= 1;
+            if (keys["a"]) direction.x += 1;
+            if (keys["d"]) direction.x -= 1;
+            direction.normalize();
+
+            const forward = new THREE.Vector3();
+            camera.getWorldDirection(forward);
+            forward.y = 0; forward.normalize();
+
+            const right = new THREE.Vector3();
+            right.crossVectors(camera.up, forward).normalize();
+
+            // Base movement velocity
+            let moveVel = new THREE.Vector3();
+            moveVel.addScaledVector(forward, direction.z * speed * delta);
+            moveVel.addScaledVector(right, direction.x * speed * delta);
+
+            // Combine dash velocity (if dashing)
+            // Dash velocity is applied for dashDuration, unaffected by delta
+            if (isDashing) {
+                // dashVelocity is in units per second, so scale by delta
+                moveVel.addScaledVector(dashVelocity, delta);
+            }
+
+            // Vertical velocity component
+            velocity.set(moveVel.x, yVelocity, moveVel.z);
+
+            if (keys[" "] && !isJumping && !isWallJumping) {
+                isJumping = true;
+                yVelocity = jumpForce;
+            }
+
+            // Apply gravity
+            if (isJumping) {
+                yVelocity += gravity;
+            }
+
+            const newPosition = controls.getObject().position.clone().add(velocity);
+
+            const newPlayerBox = new THREE.Box3().setFromCenterAndSize(
+                newPosition.clone().setY(1),
+                new THREE.Vector3(1, 2, 1)
+            );
+
+            let canMove = true;
+            for (const wall of walls) {
+                if (newPlayerBox.intersectsBox(wall)) { canMove = false; break; }
+            }
+
+            if (canMove) controls.getObject().position.copy(newPosition);
+
+            if (controls.getObject().position.y <= 1.6) {
+                isJumping = false;
+                yVelocity = 0;
+                controls.getObject().position.y = 1.6; // Ground level
+            }
+        }
+
+        // === Game Loop ===
+        let lastTime = performance.now();
+        function animate() {
+            const currentTime = performance.now();
+            const delta = (currentTime - lastTime) / 1000; // seconds elapsed
+            lastTime = currentTime;
+
+            updateMovement(delta);
+            renderer.render(scene, camera);
+            requestAnimationFrame(animate);
+        }
+        animate();
+
+        window.addEventListener("resize", () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
+
